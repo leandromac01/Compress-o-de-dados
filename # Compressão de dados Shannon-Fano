@@ -1,0 +1,135 @@
+# Compressão de dados Shannon-Fano
+# http://en.wikipedia.org/wiki/Shannon%E2%80%93Fano_coding
+# (Tamanho máximo de arquivo compactável: 2**32 bytes)
+# FB - 201012153
+
+import sys
+import os
+
+def shannon_fano_encoder(iA, iB):
+    global tupleList
+    size = iB - iA + 1
+    if size > 1:
+        # Divide a lista em 2 grupos.
+        # O grupo superior receberá 0, o inferior 1 como o novo bit de codificação.
+        mid = int(size / 2 + iA)
+        for i in range(iA, iB + 1):
+            tup = tupleList[i]
+            if i < mid:  # grupo superior
+                tupleList[i] = (tup[0], tup[1], tup[2] + '0')
+            else:  # grupo inferior
+                tupleList[i] = (tup[0], tup[1], tup[2] + '1')
+        # Chamadas recursivas para ambos os grupos
+        shannon_fano_encoder(iA, mid - 1)
+        shannon_fano_encoder(mid, iB)
+
+def byte_writer(bitStr, outputFile):
+    global bitStream
+    bitStream += bitStr
+    while len(bitStream) > 8:  # Escreve byte(s) se houver mais de 8 bits
+        byteStr = bitStream[:8]
+        bitStream = bitStream[8:]
+        outputFile.write(chr(int(byteStr, 2)))
+
+def bit_reader(n):  # Número de bits a serem lidos
+    global byteArr
+    global bitPosition
+    bitStr = ''
+    for _ in range(n):
+        bitPosInByte = 7 - (bitPosition % 8)
+        bytePosition = int(bitPosition / 8)
+        byteVal = byteArr[bytePosition]
+        bitVal = int(byteVal / (2 ** bitPosInByte)) % 2
+        bitStr += str(bitVal)
+        bitPosition += 1  # Prepare-se para ler o próximo bit
+    return bitStr
+
+def encode_file(inputFile, outputFile):
+    # Lê todo o arquivo de entrada em uma matriz de bytes
+    with open(inputFile, 'rb') as fi:
+        byteArr = bytearray(fi.read())
+
+    # Calcular a frequência de cada valor de byte
+    freqList = [0] * 256
+    for b in byteArr:
+        freqList[b] += 1
+
+    # Cria uma lista de tuplas (frequência, byteValue, encodingBitStr)
+    tupleList = [(freqList[b], b, '') for b in range(256) if freqList[b] > 0]
+
+    # Classificar a lista de acordo com as frequências decrescentes
+    tupleList.sort(key=lambda tup: tup[0], reverse=True)
+
+    shannon_fano_encoder(0, len(tupleList) - 1)
+
+    # Cria um dicionário de pares byteValue: encodingBitStr
+    encoding_dict = {tup[1]: tup[2] for tup in tupleList}
+
+    # Escreve o cabeçalho do arquivo compactado
+    bitStream = ''
+    with open(outputFile, 'wb') as fo:
+        fo.write(chr(len(encoding_dict) - 1).encode('utf-8'))
+        for byteValue, encodingBitStr in encoding_dict.items():
+            bitStr = bin(byteValue)[2:].zfill(8)
+            byte_writer(bitStr, fo)
+            bitStr = bin(len(encodingBitStr) - 1)[2:].zfill(3)
+            byte_writer(bitStr, fo)
+            byte_writer(encodingBitStr, fo)
+
+        # Escreve valor de 32 bits (tamanho do arquivo de entrada) - 1
+        bitStr = bin(len(byteArr) - 1)[2:].zfill(32)
+        byte_writer(bitStr, fo)
+
+        # Escreve os dados codificados
+        for b in byteArr:
+            byte_writer(encoding_dict[b], fo)
+
+        byte_writer('0' * 8, fo)  # Para escrever os últimos bits restantes (se houver)
+
+def decode_file(inputFile, outputFile):
+    global byteArr, bitPosition
+    bitPosition = 0
+
+    # Lê todo o arquivo de entrada em uma matriz de bytes
+    with open(inputFile, 'rb') as fi:
+        byteArr = bytearray(fi.read())
+
+    n = int(bit_reader(8), 2) + 1  # Primeiro leia o número de tuplas de codificação
+
+    # Cria o dicionário de pares encodingBitStr: byteValue
+    decoding_dict = {}
+    for _ in range(n):
+        byteValue = int(bit_reader(8), 2)
+        m = int(bit_reader(3), 2) + 1
+        encodingBitStr = bit_reader(m)
+        decoding_dict[encodingBitStr] = byteValue
+
+    # Lê tamanho de arquivo de 32 bits (número de bytes codificados)
+    numBytes = int(bit_reader(32), 2) + 1
+
+    # Lê os dados codificados, decodifique-os, escreva no arquivo de saída
+    with open(outputFile, 'wb') as fo:
+        for _ in range(numBytes):
+            encodingBitStr = ''
+            while True:
+                encodingBitStr += bit_reader(1)
+                if encodingBitStr in decoding_dict:
+                    byteValue = decoding_dict[encodingBitStr]
+                    fo.write(chr(byteValue).encode('utf-8'))
+                    break
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        print('Uso: ShannonFano.py [e|d] [caminho]NomeDoArquivoDeEntrada [caminho]NomeDoArquivoDeSaída')
+        sys.exit()
+
+    mode = sys.argv[1]  # codificação/decodificação
+    inputFile = sys.argv[2]
+    outputFile = sys.argv[3]
+
+    if mode == 'e':  # CODIFICAÇÃO DE ARQUIVO
+        encode_file(inputFile, outputFile)
+    elif mode == 'd':  # DECODIFICAÇÃO DE ARQUIVO
+        decode_file(inputFile, outputFile)
+    else:
+        print('Modo inválido. Use "e" para codificar e "d" para decodificar.')
